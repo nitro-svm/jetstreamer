@@ -12,7 +12,7 @@ use arrow::{
     record_batch::RecordBatch,
 };
 use aws_config::BehaviorVersion;
-use aws_sdk_s3::{primitives::ByteStream, Client as S3Client};
+use aws_sdk_s3::{Client as S3Client, error::ProvideErrorMetadata, primitives::ByteStream};
 use parquet::{
     arrow::ArrowWriter,
     basic::Compression,
@@ -24,11 +24,13 @@ use tokio::sync::OnceCell;
 
 use crate::{compat_bincode, types::BlockEvent};
 
-pub const SLOTS_PER_PARTITION: u64 = 1000;
+pub const SLOTS_PER_PARTITION: u64 = 1_000;
 const WRITE_OPTIMIZED_MAX_ROW_GROUP_ROWS: usize = 1_000;
 const ZSTD_COMPRESSION_LEVEL: i32 = 6;
-// Arrow Binary uses i32 offsets, so keep each batch payload below that bound.
-const MAX_BINARY_BYTES_PER_BATCH: usize = (i32::MAX as usize) - (8 * 1024 * 1024);
+const DEFAULT_ZSTD_THREADS_PER_WRITER: u32 = 1;
+const MAX_ZSTD_THREADS_PER_WRITER: u32 = 8;
+// Keep batch payloads modest to reduce peak RSS while still writing contiguous parquet batches.
+const MAX_BINARY_BYTES_PER_BATCH: usize = 1_024 * 1_024 * 1_024 * 3 / 2;
 
 #[derive(Debug, Error)]
 pub enum WriterError {
@@ -42,6 +44,8 @@ pub enum WriterError {
     Io(#[from] std::io::Error),
     #[error("S3 put error: {0}")]
     S3Put(String),
+    #[error("S3 head error: {0}")]
+    S3Head(String),
     #[error("ByteStream error: {0}")]
     ByteStream(String),
 }
@@ -119,12 +123,16 @@ struct ZstdArrowWriter<W: Write + Send + 'static> {
 }
 
 impl<W: Write + Send + 'static> ZstdArrowWriter<W> {
-    fn new(writer: W, schema: SchemaRef) -> Result<Self, ParquetError> {
+    fn new(
+        writer: W,
+        schema: SchemaRef,
+        zstd_threads_per_writer: u32,
+    ) -> Result<Self, ParquetError> {
         let buf_writer = BufWriter::with_capacity(1024 * 1024, writer);
         let mut encoder = zstd::Encoder::new(buf_writer, ZSTD_COMPRESSION_LEVEL)
             .map_err(|e| ParquetError::External(Box::new(e)))?;
         encoder
-            .multithread(1)
+            .multithread(zstd_threads_per_writer)
             .map_err(|e| ParquetError::External(Box::new(e)))?;
 
         let props = WriterProperties::builder()
@@ -154,12 +162,21 @@ pub fn slot_to_partition(slot: u64) -> u64 {
     slot / SLOTS_PER_PARTITION
 }
 
+pub struct PreparedPartitionUpload {
+    pub partition: u64,
+    pub rows_written: usize,
+    pub s3_key: String,
+    pub output_path: PathBuf,
+    pub should_cleanup: bool,
+}
+
 pub struct PartitionWriter {
     s3_bucket: String,
     s3_prefix: String,
     s3_client: OnceCell<S3Client>,
     temp_dir: PathBuf,
     data_path: Option<PathBuf>,
+    zstd_threads_per_writer: u32,
 }
 
 impl PartitionWriter {
@@ -169,12 +186,19 @@ impl PartitionWriter {
         temp_dir: PathBuf,
         data_path: Option<PathBuf>,
     ) -> Self {
+        let zstd_threads_per_writer = std::env::var("HISTORY_IMPORT_ZSTD_THREADS_PER_WRITER")
+            .ok()
+            .and_then(|value| value.parse::<u32>().ok())
+            .map(|value| value.clamp(1, MAX_ZSTD_THREADS_PER_WRITER))
+            .unwrap_or(DEFAULT_ZSTD_THREADS_PER_WRITER);
+
         Self {
             s3_bucket,
             s3_prefix: s3_prefix.trim_matches('/').to_string(),
             s3_client: OnceCell::new(),
             temp_dir,
             data_path,
+            zstd_threads_per_writer,
         }
     }
 
@@ -187,11 +211,42 @@ impl PartitionWriter {
             .await
     }
 
+    pub async fn partition_exists(&self, partition: u64) -> Result<bool, WriterError> {
+        let client = self.init_s3().await;
+        let s3_key = self.s3_key_for_partition(partition);
+
+        match client
+            .head_object()
+            .bucket(&self.s3_bucket)
+            .key(&s3_key)
+            .send()
+            .await
+        {
+            Ok(_) => Ok(true),
+            Err(err) => {
+                if let Some(service_err) = err.as_service_error() {
+                    let is_not_found =
+                        matches!(service_err.code(), Some("NotFound" | "NoSuchKey" | "404"));
+                    if is_not_found {
+                        return Ok(false);
+                    }
+                }
+                if err.to_string().contains("404") {
+                    return Ok(false);
+                }
+                Err(WriterError::S3Head(format!("{err:?}")))
+            }
+        }
+    }
+
     fn s3_key_for_partition(&self, partition: u64) -> String {
         if self.s3_prefix.is_empty() {
             format!("blocks/{partition:010}/block.parquet.zst")
         } else {
-            format!("{}/blocks/{partition:010}/block.parquet.zst", self.s3_prefix)
+            format!(
+                "{}/blocks/{partition:010}/block.parquet.zst",
+                self.s3_prefix
+            )
         }
     }
 
@@ -219,13 +274,19 @@ impl PartitionWriter {
         }
     }
 
-    pub async fn upload_partition(
+    pub fn prepare_partition(
         &self,
         partition: u64,
         mut blocks: Vec<BlockEvent>,
-    ) -> Result<(), WriterError> {
+    ) -> Result<PreparedPartitionUpload, WriterError> {
         if blocks.is_empty() {
-            return Ok(());
+            return Ok(PreparedPartitionUpload {
+                partition,
+                rows_written: 0,
+                s3_key: self.s3_key_for_partition(partition),
+                output_path: PathBuf::new(),
+                should_cleanup: false,
+            });
         }
 
         // Keep deterministic in-partition ordering before serialization.
@@ -237,11 +298,12 @@ impl PartitionWriter {
         let mut rows_written = 0usize;
         {
             let file = File::create(&output_path)?;
-            let mut parquet_writer = ZstdArrowWriter::new(file, blocks_schema())?;
+            let mut parquet_writer =
+                ZstdArrowWriter::new(file, blocks_schema(), self.zstd_threads_per_writer)?;
             let mut batch_builder = BlockBatchBuilder::new();
 
-            for block in &blocks {
-                let block_data = compat_bincode::serialize(block)?;
+            for block in blocks.drain(..) {
+                let block_data = compat_bincode::serialize(&block)?;
                 if block_data.len() > MAX_BINARY_BYTES_PER_BATCH {
                     return Err(WriterError::Io(std::io::Error::new(
                         std::io::ErrorKind::InvalidData,
@@ -271,15 +333,32 @@ impl PartitionWriter {
             parquet_writer.close()?;
         }
 
+        Ok(PreparedPartitionUpload {
+            partition,
+            rows_written,
+            s3_key,
+            output_path,
+            should_cleanup,
+        })
+    }
+
+    pub async fn upload_prepared_partition(
+        &self,
+        prepared: PreparedPartitionUpload,
+    ) -> Result<(), WriterError> {
+        if prepared.rows_written == 0 {
+            return Ok(());
+        }
+
         let client = self.init_s3().await;
-        let body = ByteStream::from_path(&output_path)
+        let body = ByteStream::from_path(&prepared.output_path)
             .await
             .map_err(|e| WriterError::ByteStream(e.to_string()))?;
 
         client
             .put_object()
             .bucket(&self.s3_bucket)
-            .key(&s3_key)
+            .key(&prepared.s3_key)
             .body(body)
             .send()
             .await
@@ -287,17 +366,19 @@ impl PartitionWriter {
 
         log::info!(
             "Uploaded partition {partition} ({} blocks) to s3://{}/{}",
-            rows_written,
+            prepared.rows_written,
             self.s3_bucket,
-            s3_key,
+            prepared.s3_key,
+            partition = prepared.partition,
         );
 
-        if should_cleanup {
-            fs::remove_file(&output_path).ok();
+        if prepared.should_cleanup {
+            fs::remove_file(&prepared.output_path).ok();
         } else {
             log::info!(
                 "Persisted partition {partition} locally at {}",
-                output_path.display()
+                prepared.output_path.display(),
+                partition = prepared.partition,
             );
         }
 

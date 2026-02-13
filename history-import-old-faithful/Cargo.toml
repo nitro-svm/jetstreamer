@@ -21,6 +21,7 @@ tempfile.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["full"] }
 zstd = { workspace = true, features = ["zstdmt"] }
+tikv-jemallocator = "0.6"
 
 jetstreamer = { path = ".." }
 jetstreamer-firehose.workspace = true

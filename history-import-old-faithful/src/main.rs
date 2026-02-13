@@ -6,8 +6,12 @@ mod writer;
 use clap::Parser;
 use jetstreamer::JetstreamerRunner;
 use std::path::PathBuf;
+use tikv_jemallocator::Jemalloc;
 
 use crate::plugin::ParquetExportPlugin;
+
+#[global_allocator]
+static GLOBAL: Jemalloc = Jemalloc;
 
 #[derive(Parser)]
 #[command(about = "Export Old Faithful block data to partitioned parquet files on S3")]
@@ -36,6 +40,14 @@ struct Args {
     /// Files are written under this root using the same key layout as S3.
     #[arg(long, env)]
     data_path: Option<PathBuf>,
+
+    /// Probe S3 once at startup and skip partitions that already exist.
+    #[arg(
+        long,
+        env = "HISTORY_IMPORT_SKIP_EXISTING_PARTITIONS",
+        default_value_t = true
+    )]
+    skip_existing_partitions: bool,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -56,6 +68,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         args.start_slot,
         args.end_slot,
         args.threads,
+        args.skip_existing_partitions,
     );
 
     JetstreamerRunner::new()
