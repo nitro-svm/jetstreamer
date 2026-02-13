@@ -1,5 +1,5 @@
 [workspace]
-members = ["jetstreamer-firehose", "jetstreamer-plugin", "jetstreamer-utils"]
+members = ["jetstreamer-firehose", "jetstreamer-plugin", "jetstreamer-utils", "history-import-old-faithful"]
 
 [workspace.package]
 edition = "2024"
@@ -97,10 +97,18 @@ ctrlc = "3"
 indoc = "2"
 tempfile = "3"
 libc = "0"
+arrow = "56"
+aws-config = "1"
 aws-credential-types = "1"
 aws-sdk-s3 = "1"
 aws-smithy-types = "1"
 aws-types = "1"
+bincode_2 = { package = "bincode", version = "2", features = ["serde", "std", "alloc"] }
+clap = { version = "4", features = ["derive", "env"] }
+parquet = { version = "56", features = ["async"] }
+serde_with = { version = "3", features = ["base64"] }
+solana-account-decoder = "3"
+solana-transaction-error = "3"
 
 [dependencies]
 tokio.workspace = true
