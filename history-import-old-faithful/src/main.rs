@@ -5,6 +5,7 @@ mod writer;
 
 use clap::Parser;
 use jetstreamer::JetstreamerRunner;
+use std::path::PathBuf;
 
 use crate::plugin::ParquetExportPlugin;
 
@@ -30,6 +31,11 @@ struct Args {
     /// Number of firehose ingestion threads.
     #[arg(long, env = "JETSTREAMER_THREADS", default_value = "4")]
     threads: usize,
+
+    /// Optional local root directory where partition files are persisted.
+    /// Files are written under this root using the same key layout as S3.
+    #[arg(long, env)]
+    data_path: Option<PathBuf>,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -46,6 +52,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         args.s3_bucket,
         args.s3_prefix,
         temp_dir.path().to_path_buf(),
+        args.data_path,
+        args.start_slot,
+        args.end_slot,
+        args.threads,
     );
 
     JetstreamerRunner::new()
