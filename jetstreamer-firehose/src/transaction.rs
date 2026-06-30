@@ -209,6 +209,9 @@ mod wincode_schema {
                 solana_message::VersionedMessage::V0(message) => {
                     Ok(1 + V0Message::size_of(message)?)
                 }
+                solana_message::VersionedMessage::V1(_) => Err(wincode::error::WriteError::Custom(
+                    "V1 versioned messages are not supported",
+                )),
             }
         }
 
@@ -222,6 +225,9 @@ mod wincode_schema {
                     u8::write(writer, &MESSAGE_VERSION_PREFIX)?;
                     V0Message::write(writer, message)
                 }
+                solana_message::VersionedMessage::V1(_) => Err(wincode::error::WriteError::Custom(
+                    "V1 versioned messages are not supported",
+                )),
             }
         }
     }

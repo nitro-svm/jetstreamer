@@ -9,12 +9,17 @@ use solana_geyser_plugin_manager::{
 };
 use solana_hash::Hash;
 use solana_ledger::entry_notifier_interface::EntryNotifier;
-use solana_reward_info::RewardInfo;
 use solana_rpc::{
     optimistically_confirmed_bank_tracker::SlotNotification,
     transaction_notifier_interface::TransactionNotifier,
 };
-use solana_runtime::bank::{KeyedRewardsAndNumPartitions, RewardType};
+// Agave 4.1 no longer exposes a publicly constructible reward type. We keep the
+// upstream `KeyedRewardsAndNumPartitions` (aliased) only to satisfy the geyser
+// `notify_block_metadata` signature, and define our own reward types below for
+// the firehose's native reward handlers.
+use solana_runtime::bank::{
+    KeyedRewardsAndNumPartitions as GeyserKeyedRewardsAndNumPartitions, RewardType,
+};
 use solana_sdk_ids::vote::id as vote_program_id;
 use solana_transaction::versioned::VersionedTransaction;
 use std::{
@@ -471,7 +476,7 @@ fn decode_rewards_from_frame(
 fn decode_rewards_from_bytes(slot: u64, bytes: &[u8]) -> Result<DecodedRewards, SharedError> {
     let epoch = slot_to_epoch(slot);
     let proto_attempt: Result<solana_storage_proto::convert::generated::Rewards, _> =
-        prost_011::Message::decode(bytes);
+        prost::Message::decode(bytes);
     match proto_attempt {
         Ok(proto) => {
             let num_partitions = proto.num_partitions.as_ref().map(|p| p.num_partitions);
@@ -526,7 +531,7 @@ fn decode_transaction_status_meta(
 
     let bin_err_for_proto = bincode_err.clone();
     let proto: solana_storage_proto::convert::generated::TransactionStatusMeta =
-        prost_011::Message::decode(metadata_bytes).map_err(|err| {
+        prost::Message::decode(metadata_bytes).map_err(|err| {
             // If we already tried bincode, surface both failures for easier debugging.
             if let Some(ref bin_err) = bin_err_for_proto {
                 Box::new(std::io::Error::other(format!(
@@ -601,7 +606,7 @@ mod metadata_decode_tests {
         let meta = sample_meta();
         let generated: solana_storage_proto::convert::generated::TransactionStatusMeta =
             meta.clone().into();
-        let bytes = prost_011::Message::encode_to_vec(&generated);
+        let bytes = prost::Message::encode_to_vec(&generated);
         let decoded = decode_transaction_status_meta(157 * 432000, &bytes).expect("decode");
         assert_eq!(decoded, meta);
     }
@@ -611,7 +616,7 @@ mod metadata_decode_tests {
         let meta = sample_meta();
         let generated: solana_storage_proto::convert::generated::TransactionStatusMeta =
             meta.clone().into();
-        let bytes = prost_011::Message::encode_to_vec(&generated);
+        let bytes = prost::Message::encode_to_vec(&generated);
         // Epoch 100 should try bincode first; if those bytes are proto, we must fall back.
         let decoded = decode_transaction_status_meta(100 * 432000, &bytes).expect("decode");
         assert_eq!(decoded, meta);
@@ -663,12 +668,13 @@ mod rewards_decode_tests {
                 post_balance: 10,
                 reward_type: solana_storage_proto::convert::generated::RewardType::Fee as i32,
                 commission: "1".to_string(),
+                commission_bps: String::new(),
             }],
             num_partitions: Some(solana_storage_proto::convert::generated::NumPartitions {
                 num_partitions: 2,
             }),
         };
-        let bytes = prost_011::Message::encode_to_vec(&proto);
+        let bytes = prost::Message::encode_to_vec(&proto);
         let decoded = decode_rewards_from_bytes(0, &bytes).expect("decode proto rewards");
         assert_eq!(decoded.keyed_rewards.len(), 1);
         assert_eq!(decoded.num_partitions, Some(2));
@@ -683,6 +689,7 @@ mod rewards_decode_tests {
             post_balance: 9,
             reward_type: Some(RewardType::Rent),
             commission: Some(3),
+            commission_bps: None,
         };
         let stored_rewards: StoredExtendedRewards = vec![reward.into()];
         let bytes = bincode::serialize(&stored_rewards).expect("bincode serialize");
@@ -724,6 +731,36 @@ pub struct EntryData {
     pub num_hashes: u64,
     /// Entry hash.
     pub hash: Hash,
+}
+
+/// Reward information for a single account within a block.
+///
+/// Mirrors the historical `solana_reward_info::RewardInfo` layout. It is defined
+/// locally because, as of Agave 4.1, the runtime reward types
+/// (`solana_runtime::bank::KeyedRewardsAndNumPartitions` and its associated
+/// `RewardInfo`) are no longer constructible outside of `solana-runtime`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RewardInfo {
+    /// Type of reward (fee, rent, staking, or voting).
+    pub reward_type: RewardType,
+    /// Reward amount in lamports (may be negative for rent).
+    pub lamports: i64,
+    /// Account balance in lamports after the reward was applied.
+    pub post_balance: u64,
+    /// Vote account commission, present only for voting and staking rewards.
+    pub commission: Option<u8>,
+}
+
+/// Account rewards for a block together with the partition count.
+///
+/// Local stand-in for `solana_runtime::bank::KeyedRewardsAndNumPartitions`,
+/// which can no longer be constructed by downstream crates as of Agave 4.1.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct KeyedRewardsAndNumPartitions {
+    /// Reward recipients keyed by account address.
+    pub keyed_rewards: Vec<(Address, RewardInfo)>,
+    /// Number of reward partitions, when applicable (epoch-boundary blocks).
+    pub num_partitions: Option<u64>,
 }
 
 /// Reward data conveyed to reward [`Handler`] callbacks.
@@ -2077,7 +2114,7 @@ pub fn firehose_geyser(
             "unload",
             u64::MAX,
             "unload",
-            &KeyedRewardsAndNumPartitions {
+            &GeyserKeyedRewardsAndNumPartitions {
                 keyed_rewards: vec![],
                 num_partitions: None,
             },
@@ -2085,6 +2122,7 @@ pub fn firehose_geyser(
             None,
             0,
             0,
+            false,
         );
     }
     Ok(confirmed_bank_receiver)
@@ -2426,20 +2464,34 @@ async fn firehose_geyser_thread(
                                     keyed_rewards,
                                     num_partitions,
                                 } = std::mem::take(&mut this_block_rewards);
+                                // As of Agave 4.1 the `KeyedRewardsAndNumPartitions`/`RewardInfo`
+                                // required by `notify_block_metadata` can no longer be constructed
+                                // outside of `solana-runtime`, so block rewards cannot be forwarded
+                                // to external geyser plugins. The firehose's own reward handlers
+                                // (`RewardsData`/`BlockData`) still receive the complete data.
+                                if !keyed_rewards.is_empty() || num_partitions.is_some() {
+                                    log::warn!(
+                                        target: LOG_MODULE,
+                                        "not forwarding {} reward(s) for slot {} to geyser plugins: Agave 4.1 removed the public reward constructor needed by notify_block_metadata",
+                                        keyed_rewards.len(),
+                                        block.slot,
+                                    );
+                                }
                                 let block_meta_notifier = block_meta_notifier_maybe.as_ref().unwrap();
                                 block_meta_notifier.notify_block_metadata(
                                     block.meta.parent_slot,
                                     todo_previous_blockhash.to_string().as_str(),
                                     block.slot,
                                     todo_latest_entry_blockhash.to_string().as_str(),
-                                    &KeyedRewardsAndNumPartitions {
-                                        keyed_rewards,
-                                        num_partitions,
+                                    &GeyserKeyedRewardsAndNumPartitions {
+                                        keyed_rewards: vec![],
+                                        num_partitions: None,
                                     },
                                     Some(block.meta.blocktime as i64),
                                     block.meta.block_height,
                                     this_block_executed_transaction_count,
                                     this_block_entry_count,
+                                    false,
                                 );
                                 todo_previous_blockhash = todo_latest_entry_blockhash;
                                 last_counted_slot = block.slot;

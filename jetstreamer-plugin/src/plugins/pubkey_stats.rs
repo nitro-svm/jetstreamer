@@ -100,6 +100,7 @@ impl Plugin for PubkeyStatsPlugin {
             let account_keys = match &transaction.transaction.message {
                 VersionedMessage::Legacy(msg) => &msg.account_keys,
                 VersionedMessage::V0(msg) => &msg.account_keys,
+                VersionedMessage::V1(msg) => &msg.account_keys,
             };
             if account_keys.is_empty() {
                 return Ok(());
@@ -284,12 +285,12 @@ async fn backfill_pubkey_timestamps(db: Arc<Client>) -> Result<(), clickhouse::e
 mod tests {
     use super::*;
     use crate::Plugin;
+    use jetstreamer_firehose::firehose::KeyedRewardsAndNumPartitions;
     use jetstreamer_firehose::firehose::{BlockData, TransactionData};
     use serial_test::serial;
     use solana_hash::Hash;
     use solana_message::VersionedMessage;
     use solana_message::legacy::Message as LegacyMessage;
-    use solana_runtime::bank::KeyedRewardsAndNumPartitions;
     use solana_transaction::versioned::VersionedTransaction;
     use solana_transaction_status::TransactionStatusMeta;
 
