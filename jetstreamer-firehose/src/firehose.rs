@@ -681,6 +681,29 @@ mod rewards_decode_tests {
     }
 
     #[test]
+    fn decodes_deactivated_stake_rewards() {
+        let pubkey = vote_program_id().to_string();
+        let proto = solana_storage_proto::convert::generated::Rewards {
+            rewards: vec![solana_storage_proto::convert::generated::Reward {
+                pubkey,
+                lamports: 5,
+                post_balance: 10,
+                reward_type: solana_storage_proto::convert::generated::RewardType::DeactivatedStake
+                    as i32,
+                commission: String::new(),
+                commission_bps: String::new(),
+            }],
+            num_partitions: None,
+        };
+        let bytes = prost::Message::encode_to_vec(&proto);
+        let decoded = decode_rewards_from_bytes(0, &bytes).expect("decode proto rewards");
+        assert_eq!(
+            decoded.keyed_rewards[0].1.reward_type,
+            solana_runtime::bank::RewardType::DeactivatedStake
+        );
+    }
+
+    #[test]
     fn decodes_bincode_rewards() {
         let pubkey = vote_program_id().to_string();
         let reward = Reward {
@@ -2642,6 +2665,7 @@ fn convert_proto_rewards(
                 1 => RewardType::Rent,
                 2 => RewardType::Staking,
                 3 => RewardType::Voting,
+                4 => RewardType::DeactivatedStake,
                 typ => {
                     return Err(Box::new(std::io::Error::other(format!(
                         "unsupported reward type {}",
