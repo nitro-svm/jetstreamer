@@ -2968,6 +2968,7 @@ pub fn firehose_geyser(
             u64::MAX,
             "unload",
             u64::MAX,
+            u64::MAX,
             "unload",
             &KeyedRewardsAndNumPartitions {
                 keyed_rewards: vec![],
@@ -3261,6 +3262,10 @@ async fn firehose_geyser_thread(
                                 if let Some(transaction_notifier) = transaction_notifier_maybe.as_ref() {
                                     transaction_notifier.notify_transaction(
                                         block.slot,
+                                        // agave 4.3 added `bank_id` to disambiguate banks across
+                                        // forks. The firehose replays finalized history, one bank
+                                        // per slot, so the slot is a stable unique id for it.
+                                        block.slot,
                                         tx.index.unwrap() as usize,
                                         signature,
                                         &message_hash,
@@ -3295,6 +3300,7 @@ async fn firehose_geyser_thread(
                                 };
                                 entry_notifier.notify_entry(
                                     block.slot,
+                                    block.slot,
                                     entry_index,
                                     &entry_summary,
                                     starting_transaction_index,
@@ -3302,7 +3308,8 @@ async fn firehose_geyser_thread(
                                 entry_index += 1;
                             }
                             Block(block) => {
-                                let notification = SlotNotification::Root((block.slot, block.meta.parent_slot));
+                                let notification =
+                                    SlotNotification::Root((block.slot, block.meta.parent_slot, block.slot));
                                 confirmed_bank_sender.send(notification).unwrap();
 
                                 if block_meta_notifier_maybe.is_none() {
@@ -3316,6 +3323,7 @@ async fn firehose_geyser_thread(
                                 block_meta_notifier.notify_block_metadata(
                                     block.meta.parent_slot,
                                     todo_previous_blockhash.to_string().as_str(),
+                                    block.slot,
                                     block.slot,
                                     todo_latest_entry_blockhash.to_string().as_str(),
                                     &decoded_rewards.rewards,

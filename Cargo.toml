@@ -42,7 +42,7 @@ anyhow = { version = "1", default-features = false }
 base64 = "0.22"
 bincode = "1"
 serial_test = "3"
-wincode = "0.5"
+wincode = "0.6"
 bs58 = { version = "0", default-features = false }
 cbor = "0"
 cid = "0"
@@ -78,7 +78,7 @@ solana-message = { version = "4", features = ["wincode"] }
 solana-transaction = { version = "4", features = ["wincode"] }
 solana-transaction-status = "4"
 solana-sdk-ids = "3"
-solana-reward-info = "6"
+solana-reward-info = "7"
 solana-sysvar = "=4.1.0"
 sha2 = "0.11"
 tonic = { version = "0", default-features = false }
