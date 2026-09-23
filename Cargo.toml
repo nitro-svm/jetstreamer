@@ -42,7 +42,7 @@ anyhow = { version = "1", default-features = false }
 base64 = "0.22"
 bincode = "1"
 serial_test = "3"
-wincode = "0.5"
+wincode = "0.6"
 bs58 = { version = "0", default-features = false }
 cbor = "0"
 cid = "0"
@@ -59,7 +59,7 @@ prost_014 = { package = "prost", version = "0.14" }
 protobuf-src = "1"
 serde = { version = "1", default-features = false }
 serde_cbor = "0"
-agave-geyser-plugin-interface = "4"
+agave-geyser-plugin-interface = "4.3"
 solana-address = "2"
 solana-hash = "4"
 solana-blake3-hasher = "=3.1.0"
@@ -67,19 +67,19 @@ solana-epoch-rewards-hasher = "=3.1.0"
 solana-keccak-hasher = "=3.1.0"
 solana-logger = "3"
 solana-signature = { version = "3", default-features = false }
-solana-accounts-db = "4"
-solana-entry = "4"
-solana-ledger = "4"
-solana-geyser-plugin-manager = { version = "4", features = ["agave-unstable-api"] }
-solana-rpc = "4"
-solana-runtime = "4"
-solana-storage-proto = "4"
+solana-accounts-db = "4.3"
+solana-entry = "4.3"
+solana-ledger = "4.3"
+solana-geyser-plugin-manager = { version = "4.3", features = ["agave-unstable-api"] }
+solana-rpc = "4.3"
+solana-runtime = "4.3"
+solana-storage-proto = "4.3"
 solana-message = { version = "4", features = ["wincode"] }
 solana-transaction = { version = "4", features = ["wincode"] }
-solana-transaction-status = "4"
+solana-transaction-status = "4.3"
 solana-sdk-ids = "3"
-solana-reward-info = "6"
-solana-sysvar = "=4.1.0"
+solana-reward-info = "7"
+solana-sysvar = "=4.3.0"
 sha2 = "0.11"
 tonic = { version = "0", default-features = false }
 tonic-build = "0"
@@ -132,3 +132,9 @@ opt-level = 3
 [profile.release.package."*"]
 opt-level = 3
 codegen-units = 1
+
+[patch.crates-io]
+# agave 4.3 relies on APIs from anza's rocksdb fork (e.g. `get_pinned_cf_into`) that are not in any
+# published `rocksdb` release; mirror agave's own patch so `solana-ledger` compiles.
+librocksdb-sys = { git = "https://github.com/anza-xyz/rust-rocksdb", rev = "4dba80dfe9434e595a971f5b2985ff9ba4fb31e7" }
+rocksdb = { git = "https://github.com/anza-xyz/rust-rocksdb", rev = "4dba80dfe9434e595a971f5b2985ff9ba4fb31e7" }
