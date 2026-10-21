@@ -12592,8 +12592,3 @@ dependencies = [
  "cc",
  "pkg-config",
 ]
-
-[[patch.unused]]
-name = "crossbeam-epoch"
-version = "0.9.20"
-source = "git+https://github.com/anza-xyz/crossbeam?rev=5ee1c6ec671d94db14ed9238eb99e59a84555aad#5ee1c6ec671d94db14ed9238eb99e59a84555aad"

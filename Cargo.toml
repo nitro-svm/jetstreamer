@@ -134,8 +134,7 @@ opt-level = 3
 codegen-units = 1
 
 # Agave 4.3 builds only against Anza's rocksdb fork (solana-ledger calls
-# methods upstream rocksdb 0.24 lacks); same pins as agave v4.3.2's workspace.
+# methods upstream rocksdb 0.24 lacks); same pin as agave v4.3.2's workspace.
 [patch.crates-io]
-crossbeam-epoch = { git = "https://github.com/anza-xyz/crossbeam", rev = "5ee1c6ec671d94db14ed9238eb99e59a84555aad" }
 librocksdb-sys = { git = "https://github.com/anza-xyz/rust-rocksdb", rev = "4dba80dfe9434e595a971f5b2985ff9ba4fb31e7" }
 rocksdb = { git = "https://github.com/anza-xyz/rust-rocksdb", rev = "4dba80dfe9434e595a971f5b2985ff9ba4fb31e7" }
