@@ -42,7 +42,7 @@ anyhow = { version = "1", default-features = false }
 base64 = "0.23"
 bincode = "1"
 serial_test = "4"
-wincode = "0.5"
+wincode = "0.6"
 bs58 = { version = "0", default-features = false }
 cbor = "0"
 cid = "0"
@@ -62,9 +62,9 @@ serde_cbor = "0"
 agave-geyser-plugin-interface = "4"
 solana-address = "2"
 solana-hash = "4"
-solana-blake3-hasher = "=3.1.0"
-solana-epoch-rewards-hasher = "=3.1.0"
-solana-keccak-hasher = "=3.1.0"
+solana-blake3-hasher = "3"
+solana-epoch-rewards-hasher = "3"
+solana-keccak-hasher = "3"
 solana-logger = "3"
 solana-signature = { version = "3", default-features = false }
 solana-accounts-db = "4"
@@ -78,8 +78,8 @@ solana-message = { version = "4", features = ["wincode"] }
 solana-transaction = { version = "4", features = ["wincode"] }
 solana-transaction-status = "4"
 solana-sdk-ids = "3"
-solana-reward-info = "6"
-solana-sysvar = "=4.1.0"
+solana-reward-info = "7"
+solana-sysvar = "4"
 sha2 = "0.11"
 tonic = { version = "0", default-features = false }
 tonic-build = "0"
@@ -132,3 +132,10 @@ opt-level = 3
 [profile.release.package."*"]
 opt-level = 3
 codegen-units = 1
+
+# Agave 4.3 builds only against Anza's rocksdb fork (solana-ledger calls
+# methods upstream rocksdb 0.24 lacks); same pins as agave v4.3.2's workspace.
+[patch.crates-io]
+crossbeam-epoch = { git = "https://github.com/anza-xyz/crossbeam", rev = "5ee1c6ec671d94db14ed9238eb99e59a84555aad" }
+librocksdb-sys = { git = "https://github.com/anza-xyz/rust-rocksdb", rev = "4dba80dfe9434e595a971f5b2985ff9ba4fb31e7" }
+rocksdb = { git = "https://github.com/anza-xyz/rust-rocksdb", rev = "4dba80dfe9434e595a971f5b2985ff9ba4fb31e7" }

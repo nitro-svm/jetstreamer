@@ -1190,6 +1190,28 @@ mod rewards_decode_tests {
     }
 
     #[test]
+    fn decodes_protobuf_vat_debit_rewards() {
+        // Alpenglow's validator admission ticket burn: negative lamports.
+        let pubkey = vote_program_id().to_string();
+        let proto = solana_storage_proto::convert::generated::Rewards {
+            rewards: vec![solana_storage_proto::convert::generated::Reward {
+                pubkey,
+                lamports: -800_000_000,
+                post_balance: 4_200_000_000,
+                reward_type: solana_storage_proto::convert::generated::RewardType::VatDebit as i32,
+                commission: String::new(),
+                commission_bps: String::new(),
+            }],
+            num_partitions: None,
+        };
+        let bytes = prost_014::Message::encode_to_vec(&proto);
+        let decoded = decode_rewards_from_bytes(0, &bytes).expect("decode proto rewards");
+        let (_, reward) = &decoded.rewards.keyed_rewards[0];
+        assert_eq!(reward.reward_type, RewardType::VATDebit);
+        assert_eq!(reward.lamports, -800_000_000);
+    }
+
+    #[test]
     fn decodes_bincode_rewards() {
         let pubkey = vote_program_id().to_string();
         let reward = Reward {
@@ -2983,6 +3005,7 @@ pub fn firehose_geyser(
             u64::MAX,
             "unload",
             u64::MAX,
+            u64::MAX,
             "unload",
             &KeyedRewardsAndNumPartitions {
                 keyed_rewards: vec![],
@@ -3277,6 +3300,8 @@ async fn firehose_geyser_thread(
                                 if let Some(transaction_notifier) = transaction_notifier_maybe.as_ref() {
                                     transaction_notifier.notify_transaction(
                                         block.slot,
+                                        // Replayed from the archive: one bank per slot.
+                                        block.slot,
                                         tx.index.unwrap() as usize,
                                         signature,
                                         &message_hash,
@@ -3311,6 +3336,7 @@ async fn firehose_geyser_thread(
                                 };
                                 entry_notifier.notify_entry(
                                     block.slot,
+                                    block.slot,
                                     entry_index,
                                     &entry_summary,
                                     starting_transaction_index,
@@ -3318,7 +3344,7 @@ async fn firehose_geyser_thread(
                                 entry_index += 1;
                             }
                             Block(block) => {
-                                let notification = SlotNotification::Root((block.slot, block.meta.parent_slot));
+                                let notification = SlotNotification::Root((block.slot, block.meta.parent_slot, block.slot));
                                 confirmed_bank_sender.send(notification).unwrap();
 
                                 if block_meta_notifier_maybe.is_none() {
@@ -3332,6 +3358,7 @@ async fn firehose_geyser_thread(
                                 block_meta_notifier.notify_block_metadata(
                                     block.meta.parent_slot,
                                     todo_previous_blockhash.to_string().as_str(),
+                                    block.slot,
                                     block.slot,
                                     todo_latest_entry_blockhash.to_string().as_str(),
                                     &decoded_rewards.rewards,
@@ -3499,6 +3526,7 @@ fn convert_proto_rewards(
                 2 => RewardType::Staking,
                 3 => RewardType::Voting,
                 4 => RewardType::DeactivatedStake,
+                5 => RewardType::VATDebit,
                 typ => {
                     return Err(Box::new(std::io::Error::other(format!(
                         "unsupported reward type {}",
